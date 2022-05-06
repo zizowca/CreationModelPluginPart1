@@ -1,7 +1,9 @@
-﻿using Autodesk.Revit.Attributes;
+﻿using Autodesk.Revit.ApplicationServices;
+using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Structure;
 using Autodesk.Revit.UI;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -11,7 +13,7 @@ namespace CreationModelPlugin
     public class Main : IExternalCommand
 
     {
-        
+
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
             Document doc = commandData.Application.ActiveUIDocument.Document;
@@ -52,14 +54,91 @@ namespace CreationModelPlugin
                 walls.Add(wall);
                 wall.get_Parameter(BuiltInParameter.WALL_HEIGHT_TYPE).Set(level2.Id);
             }
-           
+
             AddDoor(doc, level1, walls[0]);
             AddWindow(doc, level1, walls[1]);
             AddWindow(doc, level1, walls[2]);
             AddWindow(doc, level1, walls[3]);
+            //AddRoof(doc, level2, walls);
+            AddExRoof(doc, level2, walls, width, depth);
             transaction.Commit();
 
             return Result.Succeeded;
+        }
+
+        private void AddExRoof(Document doc, Level level2, List<Wall> walls, double width, double depth)
+        {
+            RoofType roofType = new FilteredElementCollector(doc)
+                .OfClass(typeof(RoofType))
+                .OfType<RoofType>()
+                .Where(x => x.Name.Equals("Типовой - 400мм"))
+                .Where(x => x.FamilyName.Equals("Базовая крыша"))
+                .FirstOrDefault();
+            View view = new FilteredElementCollector(doc)
+                .OfClass(typeof(View))
+                .OfType<View>()
+                .Where(x => x.Name.Equals("Уровень 1"))
+                .FirstOrDefault();
+
+            double wallWidth = walls[0].Width;
+            double dt = wallWidth / 2;
+
+            double extrussionStart = -width / 2 - dt;
+            double extrussionEnd = width / 2 + dt;
+
+            double curveStart = -depth / 2 - dt;
+            double curveEnd = depth / 2 + dt;
+
+
+
+            CurveArray curveArray = new CurveArray();
+            curveArray.Append(Line.CreateBound(new XYZ(0, curveStart, level2.Elevation), new XYZ(0, 0, level2.Elevation + 7)));
+            curveArray.Append(Line.CreateBound(new XYZ(0, 0, level2.Elevation + 7), new XYZ(0, curveEnd, level2.Elevation)));
+
+            ReferencePlane plane = doc.Create.NewReferencePlane(new XYZ(0, 0, 0), new XYZ(0, 0, 20), new XYZ(0, 20, 0), view);
+            ExtrusionRoof extrussiinRoof = doc.Create.NewExtrusionRoof(curveArray, plane, level2, roofType, extrussionStart, extrussionEnd);
+            extrussiinRoof.EaveCuts = EaveCutterType.TwoCutSquare;
+
+        }
+
+        private void AddRoof(Document doc, Level level2, List<Wall> walls)
+        {
+            RoofType roofType = new FilteredElementCollector(doc)
+                .OfClass(typeof(RoofType))
+                .OfType<RoofType>()
+                .Where(x => x.Name.Equals("Типовой - 400мм"))
+                .Where(x => x.FamilyName.Equals("Базовая крыша"))
+                .FirstOrDefault();
+            double wallWidth = walls[0].Width;
+            double dt = wallWidth / 2;
+            List<XYZ> points = new List<XYZ>();
+            points.Add(new XYZ(-dt, -dt, 0));
+            points.Add(new XYZ(dt, -dt, 0));
+            points.Add(new XYZ(dt, dt, 0));
+            points.Add(new XYZ(-dt, dt, 0));
+            points.Add(new XYZ(-dt, -dt, 0));
+
+            Application application = doc.Application;
+            CurveArray footprint = application.Create.NewCurveArray();
+            for (int i = 0; i < 4; i++)
+            {
+                LocationCurve curve = walls[i].Location as LocationCurve;
+                XYZ p1 = curve.Curve.GetEndPoint(0);
+                XYZ p2 = curve.Curve.GetEndPoint(1);
+                Line line = Line.CreateBound(p1 + points[i], p2 + points[i + 1]);
+                footprint.Append(line);
+            }
+            ModelCurveArray footPrintToModelCurveMapping = new ModelCurveArray();
+            FootPrintRoof footPrintRoof = doc.Create.NewFootPrintRoof(footprint, level2, roofType, out footPrintToModelCurveMapping);
+            ModelCurveArrayIterator iterator = footPrintToModelCurveMapping.ForwardIterator();
+            iterator.Reset();
+            while (iterator.MoveNext())
+            {
+                ModelCurve modelCurve = iterator.Current as ModelCurve;
+                footPrintRoof.set_DefinesSlope(modelCurve, true);
+                footPrintRoof.set_SlopeAngle(modelCurve, 0.5);
+            }
+
         }
         #region
         //private void CreateWall(Document doc, Level level1, Level level2 )
@@ -130,5 +209,6 @@ namespace CreationModelPlugin
 
             doc.Create.NewFamilyInstance(point, windowType, wall, level1, StructuralType.NonStructural);
         }
+
     }
 }
